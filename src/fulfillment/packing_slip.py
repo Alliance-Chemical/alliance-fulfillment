@@ -3,14 +3,38 @@ import io
 from datetime import datetime, timezone
 from reportlab.lib.pagesizes import inch
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Flowable
 from reportlab.lib import colors
+from reportlab.graphics.barcode import code128
 from fulfillment.models import QueuedOrder
 
 
 # ZP 505 label: 4" x 6"
 PAGE_WIDTH = 4 * inch
 PAGE_HEIGHT = 6 * inch
+
+
+class BarcodeFlowable(Flowable):
+    """Renders a Code 128 barcode as a flowable element."""
+
+    def __init__(self, value: str, bar_width: float = 0.012 * inch, bar_height: float = 0.4 * inch):
+        super().__init__()
+        self.value = value
+        self.bar_width = bar_width
+        self.bar_height = bar_height
+        self._barcode = code128.Code128(
+            value,
+            barWidth=bar_width,
+            barHeight=bar_height,
+            humanReadable=True,
+            fontSize=7,
+            fontName="Helvetica",
+        )
+        self.width = self._barcode.width
+        self.height = self._barcode.height + 4  # extra space for text
+
+    def draw(self):
+        self._barcode.drawOn(self.canv, 0, 0)
 
 
 def generate_packing_slip(order: QueuedOrder, shipstation_order: dict | None = None) -> bytes:
@@ -35,7 +59,7 @@ def generate_packing_slip(order: QueuedOrder, shipstation_order: dict | None = N
     title_style = styles["Heading1"]
     title_style.fontSize = 14
     title_style.leading = 16
-    title_style.spaceAfter = 4
+    title_style.spaceAfter = 2
 
     normal = styles["Normal"]
     normal.fontSize = 9
@@ -45,7 +69,7 @@ def generate_packing_slip(order: QueuedOrder, shipstation_order: dict | None = N
     bold_style.fontSize = 10
     bold_style.leading = 12
     bold_style.spaceAfter = 2
-    bold_style.spaceBefore = 6
+    bold_style.spaceBefore = 4
 
     small = styles["Normal"].clone("small")
     small.fontSize = 8
@@ -55,7 +79,10 @@ def generate_packing_slip(order: QueuedOrder, shipstation_order: dict | None = N
 
     # Header
     elements.append(Paragraph("ALLIANCE CHEMICAL", title_style))
-    elements.append(Paragraph(f"Order #{order.order_number}", bold_style))
+
+    # Order number barcode (Code 128)
+    elements.append(BarcodeFlowable(order.order_number))
+    elements.append(Spacer(1, 4))
 
     # Date
     order_date_str = order.order_date.strftime("%m/%d/%Y")
@@ -89,7 +116,6 @@ def generate_packing_slip(order: QueuedOrder, shipstation_order: dict | None = N
 
     table_data = [["Qty", "Item", "SKU"]]
     for item in order.line_items:
-        # Shorten name if too long
         name = item.name or ""
         if len(name) > 35:
             name = name[:32] + "..."
