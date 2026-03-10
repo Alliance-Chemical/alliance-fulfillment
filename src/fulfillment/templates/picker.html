@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alliance Fulfillment Queue</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f5; color: #333; }
+        .header { background: #1a1a2e; color: white; padding: 1rem; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 1.2rem; }
+        .container { max-width: 600px; margin: 0 auto; padding: 1rem; }
+        .picker-select { margin-bottom: 1rem; padding: 1rem; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .picker-select select, .picker-select input, .picker-select button {
+            width: 100%; padding: 0.75rem; margin-top: 0.5rem; font-size: 1rem;
+            border: 1px solid #ddd; border-radius: 4px;
+        }
+        .picker-select button { background: #1a1a2e; color: white; border: none; cursor: pointer; }
+        .batch-header { display: flex; justify-content: space-between; align-items: center; margin: 1rem 0; }
+        .order-card { background: white; border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #ccc; }
+        .order-card.red { border-left-color: #e74c3c; }
+        .order-card.yellow { border-left-color: #f39c12; }
+        .order-card.orange { border-left-color: #e67e22; }
+        .order-card.green { border-left-color: #27ae60; }
+        .order-card .order-header { display: flex; justify-content: space-between; font-weight: bold; }
+        .order-card .order-age { font-size: 0.85rem; color: #777; }
+        .order-card .order-items { margin: 0.5rem 0; font-size: 0.9rem; }
+        .order-card .order-customer { font-size: 0.85rem; color: #555; }
+        .order-card .actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+        .order-card .actions button { flex: 1; padding: 0.5rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+        .btn-complete { background: #27ae60; color: white; }
+        .btn-problem { background: #e74c3c; color: white; }
+        .btn-print { background: #3498db; color: white; }
+        .zone-divider { text-align: center; color: #999; font-size: 0.8rem; margin: 0.5rem 0; padding: 0.25rem; border-top: 1px dashed #ddd; }
+        .get-batch-btn { width: 100%; padding: 1rem; font-size: 1.1rem; background: #1a1a2e; color: white; border: none; border-radius: 8px; cursor: pointer; margin: 1rem 0; }
+        .get-batch-btn:disabled { background: #999; cursor: not-allowed; }
+        .stock-alert { background: white; border-radius: 8px; padding: 1rem; margin-top: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .stock-alert input { width: 70%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; }
+        .stock-alert button { width: 25%; padding: 0.5rem; background: #e67e22; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 4%; }
+        .status-msg { text-align: center; padding: 0.5rem; margin: 0.5rem 0; border-radius: 4px; font-size: 0.9rem; }
+        .status-msg.success { background: #d4edda; color: #155724; }
+        .status-msg.error { background: #f8d7da; color: #721c24; }
+        #batch-container { min-height: 200px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Alliance Fulfillment Queue</h1>
+        <span id="picker-status">Not signed in</span>
+    </div>
+
+    <div class="container">
+        <!-- Picker Login -->
+        <div class="picker-select" id="picker-login">
+            <label><strong>Your Name:</strong></label>
+            <input type="text" id="picker-name" placeholder="Enter your name">
+            <button onclick="registerPicker()">Sign In</button>
+        </div>
+
+        <!-- Batch Controls (hidden until signed in) -->
+        <div id="work-area" style="display:none;">
+            <button class="get-batch-btn" id="get-batch-btn" onclick="requestBatch()">
+                Get Next Batch
+            </button>
+
+            <div id="status-area"></div>
+
+            <div id="batch-container"></div>
+
+            <!-- Low Stock Alert -->
+            <div class="stock-alert">
+                <strong>Flag Low Stock:</strong><br>
+                <input type="text" id="stock-product" placeholder="Product name...">
+                <button onclick="flagLowStock()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let pickerId = null;
+        let pickerName = '';
+
+        async function registerPicker() {
+            const name = document.getElementById('picker-name').value.trim();
+            if (!name) return;
+            const resp = await fetch('/api/pickers', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name})
+            });
+            const data = await resp.json();
+            pickerId = data.id;
+            pickerName = data.name;
+            document.getElementById('picker-status').textContent = `Picker: ${pickerName}`;
+            document.getElementById('picker-login').style.display = 'none';
+            document.getElementById('work-area').style.display = 'block';
+        }
+
+        async function requestBatch() {
+            if (!pickerId) return;
+            const btn = document.getElementById('get-batch-btn');
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+
+            const resp = await fetch(`/api/pickers/${pickerId}/batch`, {method: 'POST'});
+            const data = await resp.json();
+            renderBatch(data.orders);
+
+            btn.disabled = false;
+            btn.textContent = 'Get Next Batch';
+        }
+
+        function renderBatch(orders) {
+            const container = document.getElementById('batch-container');
+            if (orders.length === 0) {
+                container.innerHTML = '<div class="status-msg">No orders in queue right now. Check back soon.</div>';
+                return;
+            }
+            let html = `<div class="batch-header"><strong>Your Batch (${orders.length} orders)</strong></div>`;
+            let lastZone = '';
+            for (const order of orders) {
+                if (order.zone !== lastZone && lastZone !== '') {
+                    html += `<div class="zone-divider">Zone: ${lastZone} \u2192 ${order.zone}</div>`;
+                }
+                lastZone = order.zone;
+                const items = order.line_items.map(li => `${li.quantity}x ${li.name}`).join(', ');
+                html += `
+                    <div class="order-card ${order.age_bracket}">
+                        <div class="order-header">
+                            <span>#${order.order_number}</span>
+                            <span class="order-age">${Math.round(order.age_hours)}h old</span>
+                        </div>
+                        <div class="order-items">${items}</div>
+                        <div class="order-customer">${order.customer_name} \u2014 ${order.ship_to_state}</div>
+                        <div class="actions">
+                            <button class="btn-complete" onclick="completeOrder(${order.id})">Complete</button>
+                            <button class="btn-problem" onclick="problemOrder(${order.id})">Problem</button>
+                        </div>
+                    </div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        async function completeOrder(orderId) {
+            await fetch(`/api/orders/${orderId}/complete`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({picker_id: pickerId})
+            });
+            const card = event.target.closest('.order-card');
+            card.style.opacity = '0.3';
+            card.querySelector('.actions').innerHTML = '<span class="status-msg success">Done</span>';
+        }
+
+        async function problemOrder(orderId) {
+            const reason = prompt('What is the problem?');
+            if (!reason) return;
+            await fetch(`/api/orders/${orderId}/problem`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({picker_id: pickerId, reason: reason})
+            });
+            const card = event.target.closest('.order-card');
+            card.style.opacity = '0.3';
+            card.querySelector('.actions').innerHTML = '<span class="status-msg error">Flagged</span>';
+        }
+
+        async function flagLowStock() {
+            const product = document.getElementById('stock-product').value.trim();
+            if (!product || !pickerId) return;
+            await fetch('/api/alerts/stock', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({picker_id: pickerId, product_name: product})
+            });
+            document.getElementById('stock-product').value = '';
+            const area = document.getElementById('status-area');
+            area.innerHTML = '<div class="status-msg success">Low stock alert sent!</div>';
+            setTimeout(() => area.innerHTML = '', 3000);
+        }
+    </script>
+</body>
+</html>
