@@ -293,6 +293,10 @@ class FulfillmentDB:
                 "oldest_age_hours": oldest,
             }
 
+    def delete_picker(self, picker_id: int):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM pickers WHERE id=?", (picker_id,))
+
     def remove_shipped_orders(self, active_shipstation_ids: set[int]):
         """Remove orders from queue that are no longer in ShipStation awaiting_shipment."""
         with self._conn() as conn:

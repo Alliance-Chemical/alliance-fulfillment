@@ -1,11 +1,45 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 from fulfillment.db import FulfillmentDB
 from fulfillment.sms import SMSNotifier
 from fulfillment.config import config
+from fulfillment.auth import make_serializer, set_auth_cookie, check_auth, require_password_set
+
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login - Alliance Fulfillment</title>
+<style>
+  body {{ font-family: -apple-system, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; }}
+  .login {{ background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: 300px; }}
+  .login h2 {{ margin: 0 0 1rem; color: #1a1a2e; }}
+  .login input {{ width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; margin-bottom: 1rem; box-sizing: border-box; }}
+  .login button {{ width: 100%; padding: 0.75rem; background: #1a1a2e; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; }}
+  .error {{ color: #e74c3c; font-size: 0.9rem; margin-bottom: 0.5rem; display: none; }}
+</style></head>
+<body><div class="login">
+  <h2>{title}</h2>
+  <div class="error" id="error">Wrong password</div>
+  <input type="password" id="password" placeholder="Enter password" onkeydown="if(event.key==='Enter')login()">
+  <button onclick="login()">Sign In</button>
+</div>
+<script>
+async function login() {{
+  const pwd = document.getElementById('password').value;
+  const resp = await fetch('/api/auth/{role}', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{password: pwd}})
+  }});
+  if (resp.ok) {{ window.location.href = '/{role}'; }}
+  else {{ document.getElementById('error').style.display = 'block'; }}
+}}
+</script></body></html>
+"""
 
 
 def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) -> FastAPI:
@@ -17,11 +51,66 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) 
         from_number=config.twilio_from_number,
     )
 
+    serializer = make_serializer(config.app_secret_key)
+
     templates_dir = Path(__file__).parent / "templates"
     if templates_dir.exists():
         templates = Jinja2Templates(directory=str(templates_dir))
     else:
         templates = None
+
+    # --- Auth helpers ---
+
+    def check_picker_auth(request: Request) -> bool:
+        if not require_password_set(db, "picker"):
+            return True  # No password set = open access
+        return check_auth(request, serializer, "picker")
+
+    def check_manager_auth(request: Request) -> bool:
+        if not require_password_set(db, "manager"):
+            return True
+        return check_auth(request, serializer, "manager")
+
+    # --- Login pages ---
+
+    @app.get("/picker/login", response_class=HTMLResponse)
+    async def picker_login_page():
+        return HTMLResponse(LOGIN_HTML.format(title="Picker Login", role="picker"))
+
+    @app.get("/manager/login", response_class=HTMLResponse)
+    async def manager_login_page():
+        return HTMLResponse(LOGIN_HTML.format(title="Manager Login", role="manager"))
+
+    # --- Auth API ---
+
+    @app.post("/api/auth/picker")
+    async def auth_picker(request: Request):
+        body = await request.json()
+        password = body.get("password", "")
+        stored = db.get_setting("picker_password", "")
+        if stored == "" or password == stored:
+            resp = JSONResponse({"status": "ok"})
+            set_auth_cookie(resp, serializer, "picker")
+            return resp
+        return JSONResponse({"error": "wrong password"}, status_code=401)
+
+    @app.post("/api/auth/manager")
+    async def auth_manager(request: Request):
+        body = await request.json()
+        password = body.get("password", "")
+        stored = db.get_setting("manager_password", "")
+        if stored == "" or password == stored:
+            resp = JSONResponse({"status": "ok"})
+            set_auth_cookie(resp, serializer, "manager")
+            return resp
+        return JSONResponse({"error": "wrong password"}, status_code=401)
+
+    @app.get("/api/auth/logout")
+    async def auth_logout():
+        resp = RedirectResponse("/picker/login", status_code=302)
+        resp.delete_cookie("picker_auth")
+        resp.delete_cookie("manager_auth")
+        return resp
 
     # --- Health ---
 
@@ -53,14 +142,25 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) 
 
     @app.post("/api/pickers")
     async def register_picker(request: Request):
+        if not check_manager_auth(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
         body = await request.json()
         name = body["name"]
         picker_id = db.create_picker(name)
         picker = db.get_picker(picker_id)
         return picker
 
+    @app.delete("/api/pickers/{picker_id}")
+    async def delete_picker(picker_id: int, request: Request):
+        if not check_manager_auth(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        db.delete_picker(picker_id)
+        return {"status": "deleted"}
+
     @app.post("/api/pickers/{picker_id}/batch")
-    async def request_batch(picker_id: int):
+    async def request_batch(picker_id: int, request: Request):
+        if not check_picker_auth(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
         batch_size = int(db.get_setting("batch_size", str(config.default_batch_size)))
         orders = db.assign_batch(picker_id, batch_size=batch_size)
         return {"orders": [o.model_dump(mode="json") for o in orders]}
@@ -74,6 +174,8 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) 
 
     @app.post("/api/orders/{order_id}/complete")
     async def complete_order(order_id: int, request: Request):
+        if not check_picker_auth(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
         body = await request.json()
         picker_id = body["picker_id"]
         db.complete_order(order_id, picker_id)
@@ -81,6 +183,8 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) 
 
     @app.post("/api/orders/{order_id}/problem")
     async def flag_problem(order_id: int, request: Request):
+        if not check_picker_auth(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
         body = await request.json()
         picker_id = body["picker_id"]
         reason = body["reason"]
@@ -91,6 +195,8 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) 
 
     @app.post("/api/alerts/stock")
     async def create_stock_alert(request: Request):
+        if not check_picker_auth(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
         body = await request.json()
         picker_id = body["picker_id"]
         product_name = body["product_name"]
@@ -123,24 +229,32 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) 
             "active_picker_slots": db.get_setting("active_picker_slots", str(config.default_picker_slots)),
             "sms_number": db.get_setting("sms_number", ""),
             "refresh_interval": db.get_setting("refresh_interval", str(config.queue_refresh_seconds)),
+            "picker_password": db.get_setting("picker_password", ""),
+            "manager_password": db.get_setting("manager_password", ""),
         }
 
     @app.post("/api/settings")
     async def update_setting(request: Request):
+        if not check_manager_auth(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
         body = await request.json()
         db.set_setting(body["key"], body["value"])
         return {"status": "updated"}
 
-    # --- HTML Dashboards (HTMX) ---
+    # --- HTML Dashboards ---
 
     @app.get("/picker", response_class=HTMLResponse)
     async def picker_dashboard(request: Request):
+        if not check_picker_auth(request):
+            return RedirectResponse("/picker/login", status_code=302)
         if not templates:
             return HTMLResponse("<h1>Templates not found</h1>", status_code=500)
         return templates.TemplateResponse("picker.html", {"request": request})
 
     @app.get("/manager", response_class=HTMLResponse)
     async def manager_dashboard(request: Request):
+        if not check_manager_auth(request):
+            return RedirectResponse("/manager/login", status_code=302)
         if not templates:
             return HTMLResponse("<h1>Templates not found</h1>", status_code=500)
         return templates.TemplateResponse("manager.html", {"request": request})

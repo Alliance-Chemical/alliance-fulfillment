@@ -8,8 +8,10 @@
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f5; color: #333; }
-        .header { background: #1a1a2e; color: white; padding: 1rem; }
+        .header { background: #1a1a2e; color: white; padding: 1rem; display: flex; justify-content: space-between; align-items: center; }
         .header h1 { font-size: 1.3rem; }
+        .header a { color: white; text-decoration: none; font-size: 0.9rem; opacity: 0.8; }
+        .header a:hover { opacity: 1; }
         .container { max-width: 900px; margin: 0 auto; padding: 1rem; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
         .card { background: white; border-radius: 8px; padding: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
@@ -36,11 +38,18 @@
         .badge.active { background: #27ae60; }
         .badge.idle { background: #f39c12; }
         .badge.offline { background: #999; }
+        .add-picker-form { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+        .add-picker-form input { flex: 1; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; }
+        .add-picker-form button { padding: 0.4rem 0.75rem; background: #27ae60; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-remove { padding: 0.2rem 0.5rem; background: #e74c3c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .status-msg { padding: 0.3rem 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-top: 0.5rem; }
+        .status-msg.success { background: #d4edda; color: #155724; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>Alliance Fulfillment — Manager Console</h1>
+        <a href="/api/auth/logout">Logout</a>
     </div>
 
     <div class="container">
@@ -60,12 +69,16 @@
             <!-- Active Pickers -->
             <div class="card full-width">
                 <h2>Active Pickers</h2>
+                <div class="add-picker-form">
+                    <input type="text" id="new-picker-name" placeholder="New picker name...">
+                    <button onclick="addPicker()">Add Picker</button>
+                </div>
                 <table>
                     <thead>
-                        <tr><th>Picker</th><th>Status</th><th>Batch</th><th>Completed Today</th></tr>
+                        <tr><th>Picker</th><th>Status</th><th>Batch</th><th>Completed Today</th><th></th></tr>
                     </thead>
                     <tbody id="pickers-table">
-                        <tr><td colspan="4">Loading...</td></tr>
+                        <tr><td colspan="5">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -122,7 +135,7 @@
             const resp = await fetch('/api/pickers');
             const pickers = await resp.json();
             if (pickers.length === 0) {
-                document.getElementById('pickers-table').innerHTML = '<tr><td colspan="4">No pickers registered</td></tr>';
+                document.getElementById('pickers-table').innerHTML = '<tr><td colspan="5">No pickers registered</td></tr>';
                 return;
             }
             document.getElementById('pickers-table').innerHTML = pickers.map(p => `
@@ -131,8 +144,28 @@
                     <td><span class="badge ${p.status}">${p.status}</span></td>
                     <td>${p.current_batch_id || '\u2014'}</td>
                     <td>${p.orders_completed_today || 0}</td>
+                    <td><button class="btn-remove" onclick="removePicker(${p.id}, '${p.name}')">Remove</button></td>
                 </tr>
             `).join('');
+        }
+
+        async function addPicker() {
+            const nameInput = document.getElementById('new-picker-name');
+            const name = nameInput.value.trim();
+            if (!name) return;
+            await fetch('/api/pickers', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name})
+            });
+            nameInput.value = '';
+            refreshPickers();
+        }
+
+        async function removePicker(pickerId, pickerName) {
+            if (!confirm(`Remove picker "${pickerName}"?`)) return;
+            await fetch(`/api/pickers/${pickerId}`, { method: 'DELETE' });
+            refreshPickers();
         }
 
         async function refreshSettings() {
@@ -158,6 +191,17 @@
                     <label>Refresh (seconds):</label>
                     <input type="number" id="set-refresh" value="${s.refresh_interval}" min="30" max="600">
                     <button onclick="saveSetting('refresh_interval', document.getElementById('set-refresh').value)">Save</button>
+                </div>
+                <hr style="margin: 1rem 0; border: none; border-top: 1px solid #eee;">
+                <div class="setting-row">
+                    <label>Picker password:</label>
+                    <input type="password" id="set-picker-pwd" value="${s.picker_password}" placeholder="Not set">
+                    <button onclick="saveSetting('picker_password', document.getElementById('set-picker-pwd').value)">Save</button>
+                </div>
+                <div class="setting-row">
+                    <label>Manager password:</label>
+                    <input type="password" id="set-manager-pwd" value="${s.manager_password}" placeholder="Not set">
+                    <button onclick="saveSetting('manager_password', document.getElementById('set-manager-pwd').value)">Save</button>
                 </div>
             `;
         }

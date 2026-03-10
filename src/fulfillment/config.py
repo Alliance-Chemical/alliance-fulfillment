@@ -17,6 +17,8 @@ class Config:
     twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")
     twilio_from_number: str = os.environ.get("TWILIO_FROM_NUMBER", "")
+    # Auth
+    app_secret_key: str = os.environ.get("APP_SECRET_KEY", "alliance-fulfillment-secret-change-me")
 
 
 config = Config()

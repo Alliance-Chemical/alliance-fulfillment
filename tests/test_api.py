@@ -110,3 +110,133 @@ def test_get_pickers(seeded_client):
     assert resp.status_code == 200
     assert len(resp.json()) == 1
     assert resp.json()[0]["name"] == "Maria"
+
+
+# --- New tests for auth and picker management ---
+
+
+def test_open_access_when_no_password_set(client):
+    """When no passwords are configured, dashboards and APIs are accessible."""
+    # Manager dashboard should be accessible (no redirect)
+    resp = client.get("/manager", follow_redirects=False)
+    assert resp.status_code == 200
+
+    # Picker dashboard should be accessible
+    resp = client.get("/picker", follow_redirects=False)
+    assert resp.status_code == 200
+
+    # Settings POST should work
+    resp = client.post("/api/settings", json={"key": "batch_size", "value": "5"})
+    assert resp.status_code == 200
+
+    # Picker creation should work
+    resp = client.post("/api/pickers", json={"name": "Test"})
+    assert resp.status_code == 200
+
+
+def test_picker_login_required_when_password_set(db):
+    """When picker password is set, picker routes require auth."""
+    db.set_setting("picker_password", "secret123")
+    app = create_app(db)
+    c = TestClient(app)
+
+    # Picker dashboard redirects to login
+    resp = c.get("/picker", follow_redirects=False)
+    assert resp.status_code == 302
+    assert "/picker/login" in resp.headers["location"]
+
+    # Picker API routes return 401
+    db.create_picker("Test")
+    resp = c.post("/api/pickers/1/batch")
+    assert resp.status_code == 401
+
+    # Login with wrong password fails
+    resp = c.post("/api/auth/picker", json={"password": "wrong"})
+    assert resp.status_code == 401
+
+    # Login with correct password succeeds and sets cookie
+    resp = c.post("/api/auth/picker", json={"password": "secret123"})
+    assert resp.status_code == 200
+
+    # After login, picker dashboard is accessible (cookie set)
+    resp = c.get("/picker", follow_redirects=False)
+    assert resp.status_code == 200
+
+
+def test_manager_login_required_when_password_set(db):
+    """When manager password is set, manager routes require auth."""
+    db.set_setting("manager_password", "mgr456")
+    app = create_app(db)
+    c = TestClient(app)
+
+    # Manager dashboard redirects to login
+    resp = c.get("/manager", follow_redirects=False)
+    assert resp.status_code == 302
+    assert "/manager/login" in resp.headers["location"]
+
+    # Settings POST returns 401
+    resp = c.post("/api/settings", json={"key": "batch_size", "value": "5"})
+    assert resp.status_code == 401
+
+    # Login with correct password
+    resp = c.post("/api/auth/manager", json={"password": "mgr456"})
+    assert resp.status_code == 200
+
+    # After login, manager dashboard is accessible
+    resp = c.get("/manager", follow_redirects=False)
+    assert resp.status_code == 200
+
+    # Settings POST works after login
+    resp = c.post("/api/settings", json={"key": "batch_size", "value": "5"})
+    assert resp.status_code == 200
+
+
+def test_delete_picker(db):
+    """Manager can delete a picker."""
+    picker_id = db.create_picker("ToRemove")
+    app = create_app(db)
+    c = TestClient(app)
+
+    # Verify picker exists
+    resp = c.get("/api/pickers")
+    assert any(p["name"] == "ToRemove" for p in resp.json())
+
+    # Delete picker
+    resp = c.delete(f"/api/pickers/{picker_id}")
+    assert resp.status_code == 200
+
+    # Verify picker is gone
+    resp = c.get("/api/pickers")
+    assert not any(p["name"] == "ToRemove" for p in resp.json())
+
+
+def test_picker_dropdown_list(db):
+    """Picker list endpoint returns registered pickers for dropdown."""
+    db.create_picker("Alice")
+    db.create_picker("Bob")
+    app = create_app(db)
+    c = TestClient(app)
+
+    resp = c.get("/api/pickers")
+    assert resp.status_code == 200
+    names = [p["name"] for p in resp.json()]
+    assert "Alice" in names
+    assert "Bob" in names
+
+
+def test_delete_picker_requires_manager_auth(db):
+    """Delete picker returns 401 when manager password is set and no auth."""
+    db.set_setting("manager_password", "mgr456")
+    picker_id = db.create_picker("Worker")
+    app = create_app(db)
+    c = TestClient(app)
+
+    resp = c.delete(f"/api/pickers/{picker_id}")
+    assert resp.status_code == 401
+
+
+def test_logout_clears_cookies(client):
+    """Logout endpoint clears auth cookies and redirects."""
+    resp = client.get("/api/auth/logout", follow_redirects=False)
+    assert resp.status_code == 302
+    assert "/picker/login" in resp.headers["location"]

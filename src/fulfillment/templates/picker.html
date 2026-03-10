@@ -17,6 +17,7 @@
             border: 1px solid #ddd; border-radius: 4px;
         }
         .picker-select button { background: #1a1a2e; color: white; border: none; cursor: pointer; }
+        .no-pickers { color: #999; text-align: center; padding: 1rem; }
         .batch-header { display: flex; justify-content: space-between; align-items: center; margin: 1rem 0; }
         .order-card { background: white; border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #ccc; }
         .order-card.red { border-left-color: #e74c3c; }
@@ -53,9 +54,16 @@
     <div class="container">
         <!-- Picker Login -->
         <div class="picker-select" id="picker-login">
-            <label><strong>Your Name:</strong></label>
-            <input type="text" id="picker-name" placeholder="Enter your name">
-            <button onclick="registerPicker()">Sign In</button>
+            <label><strong>Select Your Name:</strong></label>
+            <select id="picker-dropdown">
+                <option value="">Loading...</option>
+            </select>
+            <button onclick="selectPicker()">Sign In</button>
+        </div>
+
+        <!-- No pickers message (hidden by default) -->
+        <div class="no-pickers" id="no-pickers" style="display:none;">
+            No pickers registered. Ask your manager to add you.
         </div>
 
         <!-- Batch Controls (hidden until signed in) -->
@@ -81,17 +89,34 @@
         let pickerId = null;
         let pickerName = '';
 
-        async function registerPicker() {
-            const name = document.getElementById('picker-name').value.trim();
-            if (!name) return;
-            const resp = await fetch('/api/pickers', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name: name})
-            });
-            const data = await resp.json();
-            pickerId = data.id;
-            pickerName = data.name;
+        async function loadPickers() {
+            const resp = await fetch('/api/pickers');
+            const pickers = await resp.json();
+            const dropdown = document.getElementById('picker-dropdown');
+            const loginDiv = document.getElementById('picker-login');
+            const noPickers = document.getElementById('no-pickers');
+
+            if (pickers.length === 0) {
+                loginDiv.style.display = 'none';
+                noPickers.style.display = 'block';
+                return;
+            }
+
+            dropdown.innerHTML = '<option value="">-- Select your name --</option>';
+            for (const p of pickers) {
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = p.name;
+                dropdown.appendChild(opt);
+            }
+        }
+
+        function selectPicker() {
+            const dropdown = document.getElementById('picker-dropdown');
+            const selectedId = dropdown.value;
+            if (!selectedId) return;
+            pickerId = parseInt(selectedId);
+            pickerName = dropdown.options[dropdown.selectedIndex].textContent;
             document.getElementById('picker-status').textContent = `Picker: ${pickerName}`;
             document.getElementById('picker-login').style.display = 'none';
             document.getElementById('work-area').style.display = 'block';
@@ -179,6 +204,9 @@
             area.innerHTML = '<div class="status-msg success">Low stock alert sent!</div>';
             setTimeout(() => area.innerHTML = '', 3000);
         }
+
+        // Load pickers on page load
+        loadPickers();
     </script>
 </body>
 </html>
