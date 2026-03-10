@@ -159,12 +159,17 @@
                         <div class="order-items">${items}</div>
                         <div class="order-customer">${order.customer_name} \u2014 ${order.ship_to_state}</div>
                         <div class="actions">
+                            <button class="btn-print" onclick="printSlip(${order.id})">Print Slip</button>
                             <button class="btn-complete" onclick="completeOrder(${order.id})">Complete</button>
                             <button class="btn-problem" onclick="problemOrder(${order.id})">Problem</button>
                         </div>
                     </div>`;
             }
             container.innerHTML = html;
+        }
+
+        function printSlip(orderId) {
+            window.open(`/api/orders/${orderId}/packing-slip`, '_blank');
         }
 
         async function completeOrder(orderId) {

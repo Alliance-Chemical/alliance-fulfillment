@@ -136,6 +136,11 @@ class FulfillmentDB:
             tag_ids=json.loads(row["tag_ids_json"]),
         )
 
+    def get_order_by_id(self, order_id: int) -> QueuedOrder | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM queued_orders WHERE id = ?", (order_id,)).fetchone()
+            return self._row_to_order(row) if row else None
+
     def get_queued_orders(self) -> list[QueuedOrder]:
         with self._conn() as conn:
             rows = conn.execute(

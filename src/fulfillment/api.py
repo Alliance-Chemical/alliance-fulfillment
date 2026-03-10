@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 from fulfillment.db import FulfillmentDB
 from fulfillment.sms import SMSNotifier
+from fulfillment.shipstation import ShipStationAPI
 from fulfillment.config import config
 from fulfillment.auth import make_serializer, set_auth_cookie, check_auth, require_password_set
 
@@ -42,9 +43,10 @@ async function login() {{
 """
 
 
-def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) -> FastAPI:
+def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None, ss_api: ShipStationAPI | None = None) -> FastAPI:
     app = FastAPI(title="Alliance Fulfillment Queue")
     db = db or FulfillmentDB(config.db_path)
+    ss_api = ss_api or ShipStationAPI(api_key=config.shipstation_api_key, api_secret=config.shipstation_api_secret)
     sms = sms or SMSNotifier(
         account_sid=config.twilio_account_sid,
         auth_token=config.twilio_auth_token,
@@ -190,6 +192,26 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None) 
         reason = body["reason"]
         db.flag_problem(order_id, picker_id, reason)
         return {"status": "flagged"}
+
+    # --- Packing Slip ---
+
+    @app.get("/api/orders/{order_id}/packing-slip")
+    async def get_packing_slip(order_id: int, request: Request):
+        if not check_picker_auth(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        # Look up the ShipStation order ID from our queue DB
+        order = db.get_order_by_id(order_id)
+        if not order:
+            return JSONResponse({"error": "order not found"}, status_code=404)
+        try:
+            pdf_bytes = await ss_api.get_packing_slip([order.shipstation_order_id])
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f"inline; filename=packing-slip-{order.order_number}.pdf"}
+            )
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
 
     # --- Stock Alerts ---
 
