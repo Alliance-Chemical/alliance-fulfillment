@@ -7,7 +7,7 @@ from fulfillment.db import FulfillmentDB
 from fulfillment.sms import SMSNotifier
 from fulfillment.shipstation import ShipStationAPI
 from fulfillment.config import config
-from fulfillment.auth import make_serializer, set_auth_cookie, check_auth, require_password_set
+from fulfillment.auth import make_serializer, set_auth_cookie, check_auth, require_password_set, hash_password, verify_password, is_bcrypt_hash
 
 LOGIN_HTML = """
 <!DOCTYPE html>
@@ -90,10 +90,22 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None, 
         body = await request.json()
         password = body.get("password", "")
         stored = db.get_setting("picker_password", "")
-        if stored == "" or password == stored:
+        if stored == "":
             resp = JSONResponse({"status": "ok"})
             set_auth_cookie(resp, serializer, "picker")
             return resp
+        if is_bcrypt_hash(stored):
+            if verify_password(password, stored):
+                resp = JSONResponse({"status": "ok"})
+                set_auth_cookie(resp, serializer, "picker")
+                return resp
+        else:
+            # Plain-text migration: verify and hash in place
+            if password == stored:
+                db.set_setting("picker_password", hash_password(stored))
+                resp = JSONResponse({"status": "ok"})
+                set_auth_cookie(resp, serializer, "picker")
+                return resp
         return JSONResponse({"error": "wrong password"}, status_code=401)
 
     @app.post("/api/auth/manager")
@@ -101,10 +113,21 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None, 
         body = await request.json()
         password = body.get("password", "")
         stored = db.get_setting("manager_password", "")
-        if stored == "" or password == stored:
+        if stored == "":
             resp = JSONResponse({"status": "ok"})
             set_auth_cookie(resp, serializer, "manager")
             return resp
+        if is_bcrypt_hash(stored):
+            if verify_password(password, stored):
+                resp = JSONResponse({"status": "ok"})
+                set_auth_cookie(resp, serializer, "manager")
+                return resp
+        else:
+            if password == stored:
+                db.set_setting("manager_password", hash_password(stored))
+                resp = JSONResponse({"status": "ok"})
+                set_auth_cookie(resp, serializer, "manager")
+                return resp
         return JSONResponse({"error": "wrong password"}, status_code=401)
 
     @app.get("/api/auth/logout")
@@ -264,7 +287,11 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None, 
         if not check_manager_auth(request):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         body = await request.json()
-        db.set_setting(body["key"], body["value"])
+        key = body["key"]
+        value = body["value"]
+        if key in ("picker_password", "manager_password") and value:
+            value = hash_password(value)
+        db.set_setting(key, value)
         return {"status": "updated"}
 
     # --- HTML Dashboards ---

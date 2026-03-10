@@ -240,3 +240,45 @@ def test_logout_clears_cookies(client):
     resp = client.get("/api/auth/logout", follow_redirects=False)
     assert resp.status_code == 302
     assert "/picker/login" in resp.headers["location"]
+
+
+def test_password_stored_as_bcrypt_hash(db):
+    """Setting a password stores it as a bcrypt hash, not plain text."""
+    app = create_app(db)
+    c = TestClient(app)
+    c.post("/api/settings", json={"key": "picker_password", "value": "secret123"})
+    stored = db.get_setting("picker_password", "")
+    assert stored.startswith("$2b$")
+    assert stored != "secret123"
+
+
+def test_login_works_with_hashed_password(db):
+    """Login succeeds when password is stored as bcrypt hash."""
+    from fulfillment.auth import hash_password
+    db.set_setting("picker_password", hash_password("secret123"))
+    app = create_app(db)
+    c = TestClient(app)
+    resp = c.post("/api/auth/picker", json={"password": "secret123"})
+    assert resp.status_code == 200
+
+
+def test_login_fails_with_wrong_password_hashed(db):
+    """Login fails with wrong password when stored as bcrypt hash."""
+    from fulfillment.auth import hash_password
+    db.set_setting("picker_password", hash_password("secret123"))
+    app = create_app(db)
+    c = TestClient(app)
+    resp = c.post("/api/auth/picker", json={"password": "wrong"})
+    assert resp.status_code == 401
+
+
+def test_plain_text_password_auto_migrated(db):
+    """Plain-text password is auto-migrated to bcrypt on first login."""
+    db.set_setting("picker_password", "oldplaintext")
+    app = create_app(db)
+    c = TestClient(app)
+    resp = c.post("/api/auth/picker", json={"password": "oldplaintext"})
+    assert resp.status_code == 200
+    # After login, password should now be hashed
+    stored = db.get_setting("picker_password", "")
+    assert stored.startswith("$2b$")
