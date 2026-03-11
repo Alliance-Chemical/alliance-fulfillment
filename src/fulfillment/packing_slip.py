@@ -37,13 +37,14 @@ class BarcodeFlowable(Flowable):
         self._barcode.drawOn(self.canv, 0, 0)
 
 
-def generate_packing_slip(order: QueuedOrder, shipstation_order: dict | None = None) -> bytes:
+def generate_packing_slip(order: QueuedOrder, shipstation_order: dict | None = None, picker_name: str = "") -> bytes:
     """Generate a 4x6 packing slip PDF. Returns PDF bytes.
 
     Args:
         order: QueuedOrder from our DB (has line_items, customer, etc.)
         shipstation_order: Optional full ShipStation order dict for extra details
             (ship-to address, etc.)
+        picker_name: Optional picker name to print on the slip
     """
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -55,19 +56,20 @@ def generate_packing_slip(order: QueuedOrder, shipstation_order: dict | None = N
         bottomMargin=0.2 * inch,
     )
 
-    elements = _build_slip_elements(order, shipstation_order)
+    elements = _build_slip_elements(order, shipstation_order, picker_name=picker_name)
     doc.build(elements)
     return buf.getvalue()
 
 
-def generate_batch_packing_slips(slips: list[tuple[QueuedOrder, dict | None]]) -> bytes:
+def generate_batch_packing_slips(slips: list[tuple[QueuedOrder, dict | None]], picker_name: str = "") -> bytes:
     """Generate a single multi-page PDF with one packing slip per page.
 
     Args:
         slips: list of (order, shipstation_order_dict) tuples
+        picker_name: Optional picker name to print on each slip
     """
     if len(slips) == 1:
-        return generate_packing_slip(slips[0][0], slips[0][1])
+        return generate_packing_slip(slips[0][0], slips[0][1], picker_name=picker_name)
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -85,13 +87,13 @@ def generate_batch_packing_slips(slips: list[tuple[QueuedOrder, dict | None]]) -
     for i, (order, shipstation_order) in enumerate(slips):
         if i > 0:
             all_elements.append(PageBreak())
-        all_elements.extend(_build_slip_elements(order, shipstation_order))
+        all_elements.extend(_build_slip_elements(order, shipstation_order, picker_name=picker_name))
 
     doc.build(all_elements)
     return buf.getvalue()
 
 
-def _build_slip_elements(order: QueuedOrder, shipstation_order: dict | None = None) -> list:
+def _build_slip_elements(order: QueuedOrder, shipstation_order: dict | None = None, picker_name: str = "") -> list:
     """Build the reportlab flowable elements for a single packing slip."""
     styles = getSampleStyleSheet()
     title_style = styles["Heading1"]
@@ -173,5 +175,7 @@ def _build_slip_elements(order: QueuedOrder, shipstation_order: dict | None = No
     from zoneinfo import ZoneInfo
     now_str = datetime.now(ZoneInfo("America/Chicago")).strftime("%m/%d/%Y %I:%M %p CT")
     elements.append(Paragraph(f"Printed: {now_str}", small))
+    if picker_name:
+        elements.append(Paragraph(f"Picked by: {picker_name}", small))
 
     return elements

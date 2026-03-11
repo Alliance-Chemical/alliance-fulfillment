@@ -311,8 +311,9 @@ def create_app(db: FulfillmentDB | None = None, sms: SMSNotifier | None = None, 
             slips.append((order, ss_order_dict))
         if not slips:
             return JSONResponse({"error": "no orders found"}, status_code=404)
+        picker_name = request.query_params.get("picker", "")
         from fulfillment.packing_slip import generate_batch_packing_slips
-        pdf_bytes = generate_batch_packing_slips(slips)
+        pdf_bytes = generate_batch_packing_slips(slips, picker_name=picker_name)
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
