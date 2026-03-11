@@ -175,7 +175,8 @@ def _build_slip_elements(order: QueuedOrder, shipstation_order: dict | None = No
 
     # Footer
     elements.append(Spacer(1, 10))
-    now_str = datetime.now(timezone.utc).strftime("%m/%d/%Y %I:%M %p UTC")
+    from zoneinfo import ZoneInfo
+    now_str = datetime.now(ZoneInfo("America/Chicago")).strftime("%m/%d/%Y %I:%M %p CT")
     elements.append(Paragraph(f"Printed: {now_str}", small))
 
     return elements
