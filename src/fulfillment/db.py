@@ -221,6 +221,12 @@ class FulfillmentDB:
 
     def complete_order(self, order_id: int, picker_id: int):
         with self._conn() as conn:
+            # Guard: skip if already completed (prevents duplicate completion records)
+            row = conn.execute(
+                "SELECT status FROM queued_orders WHERE id=?", (order_id,)
+            ).fetchone()
+            if row and row["status"] == "completed":
+                return
             conn.execute(
                 "UPDATE queued_orders SET status='completed', updated_at=datetime('now') WHERE id=?",
                 (order_id,)
@@ -334,11 +340,26 @@ class FulfillmentDB:
             )
 
     def remove_shipped_orders(self, active_shipstation_ids: set[int]):
-        """Remove orders from queue that are no longer in ShipStation awaiting_shipment."""
+        """Remove or auto-complete orders no longer in ShipStation awaiting_shipment."""
         with self._conn() as conn:
+            # Delete queued orders that were shipped (no picker to credit)
             rows = conn.execute(
                 "SELECT id, shipstation_order_id FROM queued_orders WHERE status='queued'"
             ).fetchall()
             for row in rows:
                 if row["shipstation_order_id"] not in active_shipstation_ids:
                     conn.execute("DELETE FROM queued_orders WHERE id=?", (row["id"],))
+            # Auto-complete assigned orders that were shipped (picker gets credit)
+            rows = conn.execute(
+                "SELECT id, shipstation_order_id, assigned_to_picker FROM queued_orders WHERE status='assigned'"
+            ).fetchall()
+            for row in rows:
+                if row["shipstation_order_id"] not in active_shipstation_ids:
+                    conn.execute(
+                        "UPDATE queued_orders SET status='completed', updated_at=datetime('now') WHERE id=?",
+                        (row["id"],)
+                    )
+                    conn.execute(
+                        "INSERT INTO completions (order_id, picker_id) VALUES (?, ?)",
+                        (row["id"], row["assigned_to_picker"])
+                    )

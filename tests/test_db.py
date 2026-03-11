@@ -180,3 +180,55 @@ def test_release_picker_orders(db):
     db.release_picker_orders(picker_id)
     assert len(db.get_assigned_orders(picker_id)) == 0
     assert len(db.get_queued_orders()) == 3
+
+
+def test_remove_shipped_auto_completes_assigned_orders(db):
+    """Assigned orders that leave awaiting_shipment are auto-completed, not deleted."""
+    db.upsert_order(QueuedOrder(
+        shipstation_order_id=400, order_number="4000",
+        order_date=datetime(2026, 3, 7, tzinfo=timezone.utc),
+        age_hours=72.0, age_bracket=AgeBracket.RED,
+        priority_score=1000, zone=OrderZone.GALLON,
+        customer_name="Test", ship_to_state="TX", order_value=10.0,
+    ))
+    db.upsert_order(QueuedOrder(
+        shipstation_order_id=401, order_number="4001",
+        order_date=datetime(2026, 3, 7, tzinfo=timezone.utc),
+        age_hours=48.0, age_bracket=AgeBracket.YELLOW,
+        priority_score=800, zone=OrderZone.GALLON,
+        customer_name="Test2", ship_to_state="CA", order_value=20.0,
+    ))
+    picker_id = db.create_picker("Maria")
+    db.assign_batch(picker_id, batch_size=2)
+    # Simulate: order 400 was shipped in ShipStation (no longer in active set)
+    db.remove_shipped_orders({401})
+    # Order 400 should be auto-completed, not deleted
+    order = db.get_order_by_id(1)
+    assert order.status == "completed"
+    # Picker should get credit
+    stats = db.get_picker_stats(picker_id)
+    assert stats["orders_completed_today"] == 1
+    # Order 401 should still be assigned
+    assigned = db.get_assigned_orders(picker_id)
+    assert len(assigned) == 1
+    assert assigned[0].order_number == "4001"
+
+
+def test_complete_order_skips_duplicate(db):
+    """Completing an already-completed order doesn't create a duplicate completion record."""
+    db.upsert_order(QueuedOrder(
+        shipstation_order_id=500, order_number="5000",
+        order_date=datetime(2026, 3, 7, tzinfo=timezone.utc),
+        age_hours=72.0, age_bracket=AgeBracket.RED,
+        priority_score=1000, zone=OrderZone.GALLON,
+        customer_name="Test", ship_to_state="TX", order_value=10.0,
+    ))
+    picker_id = db.create_picker("Maria")
+    batch = db.assign_batch(picker_id, batch_size=1)
+    order_id = batch[0].id
+    # First completion
+    db.complete_order(order_id, picker_id)
+    # Second completion (e.g. picker taps Complete after sync already auto-completed)
+    db.complete_order(order_id, picker_id)
+    stats = db.get_picker_stats(picker_id)
+    assert stats["orders_completed_today"] == 1  # Not 2
